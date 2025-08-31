@@ -1,0 +1,157 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <sys/time.h>
+
+#define NUM_MESSAGES 1000000
+
+// Function to get current time in microseconds
+double get_time_microseconds() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec * 1000000.0 + tv.tv_usec;
+}
+
+int main() {
+    int pipe_parent_to_child[2];  // Pipe for parent -> child communication
+    int pipe_child_to_parent[2];  // Pipe for child -> parent communication
+    pid_t pid;
+
+    printf("=== Pipe Communication Performance Test ===\n");
+    printf("Testing with %d messages\n\n", NUM_MESSAGES);
+
+    // Create two pipes
+    if (pipe(pipe_parent_to_child) == -1) {
+        perror("pipe1 failed");
+        exit(1);
+    }
+
+    if (pipe(pipe_child_to_parent) == -1) {
+        perror("pipe2 failed");
+        exit(1);
+    }
+
+    // Record start time
+    double start_time = get_time_microseconds();
+
+    // Fork the process
+    pid = fork();
+
+    if (pid == -1) {
+        perror("fork failed");
+        exit(1);
+    }
+
+    if (pid == 0) {
+        // CHILD PROCESS
+        printf("Child process started (PID: %d)\n", getpid());
+
+        // Close unused pipe ends
+        close(pipe_parent_to_child[1]);  // Child doesn't write to parent->child pipe
+        close(pipe_child_to_parent[0]);  // Child doesn't read from child->parent pipe
+
+        int received_msg;
+
+        // Receive messages from parent and echo them back
+        for (int i = 0; i < NUM_MESSAGES; i++) {
+            // Read message from parent
+            if (read(pipe_parent_to_child[0], &received_msg, sizeof(int)) == -1) {
+                perror("child read failed");
+                exit(1);
+            }
+
+            // Send the same message back to parent (echo)
+            if (write(pipe_child_to_parent[1], &received_msg, sizeof(int)) == -1) {
+                perror("child write failed");
+                exit(1);
+            }
+
+            // Print progress every 100,000 messages
+            if ((i + 1) % 100000 == 0) {
+                printf("Child processed %d messages\n", i + 1);
+            }
+        }
+
+        // Close pipe ends
+        close(pipe_parent_to_child[0]);
+        close(pipe_child_to_parent[1]);
+
+        printf("Child process completed!\n");
+        exit(0);
+    } 
+    else {
+        // PARENT PROCESS
+        printf("Parent process started (PID: %d)\n", getpid());
+        printf("Child PID: %d\n\n", pid);
+
+        // Close unused pipe ends
+        close(pipe_parent_to_child[0]);  // Parent doesn't read from parent->child pipe
+        close(pipe_child_to_parent[1]);  // Parent doesn't write to child->parent pipe
+
+        int message;
+        int echo_received;
+
+        printf("Starting communication test...\n");
+
+        // Send messages to child and receive echoes back
+        for (int i = 0; i < NUM_MESSAGES; i++) {
+            message = i + 1;  // Send numbers 1, 2, 3, ... 1000000
+
+            // Send message to child
+            if (write(pipe_parent_to_child[1], &message, sizeof(int)) == -1) {
+                perror("parent write failed");
+                exit(1);
+            }
+
+            // Read echo back from child
+            if (read(pipe_child_to_parent[0], &echo_received, sizeof(int)) == -1) {
+                perror("parent read failed");
+                exit(1);
+            }
+
+            // Verify the echo is correct
+            if (echo_received != message) {
+                printf("Error: Expected %d, got %d\n", message, echo_received);
+                exit(1);
+            }
+
+            // Print progress every 100,000 messages
+            if ((i + 1) % 100000 == 0) {
+                printf("Parent sent/received %d messages\n", i + 1);
+            }
+        }
+
+        // Record end time
+        double end_time = get_time_microseconds();
+
+        // Close pipe ends
+        close(pipe_parent_to_child[1]);
+        close(pipe_child_to_parent[0]);
+
+        // Wait for child process to finish
+        wait(NULL);
+
+        // Calculate performance metrics
+        double total_time_microseconds = end_time - start_time;
+        double total_time_seconds = total_time_microseconds / 1000000.0;
+
+        double messages_per_second = NUM_MESSAGES / total_time_seconds;
+        double round_trip_time_microseconds = total_time_microseconds / NUM_MESSAGES;
+        double one_way_time_microseconds = round_trip_time_microseconds / 2.0;
+
+        // Display results
+        printf("\n=== PERFORMANCE RESULTS ===\n");
+        printf("Total messages exchanged: %d\n", NUM_MESSAGES);
+        printf("Total time: %.3f seconds\n", total_time_seconds);
+        printf("Messages per second: %.2f\n", messages_per_second);
+        printf("Average round-trip time: %.3f microseconds\n", round_trip_time_microseconds);
+        printf("Average one-way forwarding time: %.3f microseconds\n", one_way_time_microseconds);
+        printf("Overall delay per round-trip: %.6f seconds\n", round_trip_time_microseconds / 1000000.0);
+
+        printf("\nTest completed successfully!\n");
+    }
+
+    return 0;
+}
